@@ -13,12 +13,22 @@ bash_write_refused="Team memory files may only be changed with the Write or Edit
 
 # Bash may read team memory but never change it, so every change goes through the checks below.
 guard_bash() {
-  local cmd="$1" clones
+  local cmd="$1" cwd="$2" clones copy mentioned=false inside=false
   clones=$(tm_clones_dir)
   case "$cmd" in
-    *"$clones"* | *".claude/team-memory"*) ;;
-    *) return 0 ;;
+    *"$clones"* | *".claude/team-memory"*) mentioned=true ;;
   esac
+  case "$cwd" in
+    "$clones" | "$clones"/*) inside=true ;;
+  esac
+  while IFS= read -r copy; do
+    [ -n "$copy" ] || continue
+    [[ "$cmd" == *"$copy"* ]] && mentioned=true
+    case "$cwd" in
+      "$copy" | "$copy"/*) inside=true ;;
+    esac
+  done < <(tm_copy_roots)
+  $mentioned || $inside || return 0
   local re
   for re in \
     '(^|[[:space:];&|(])(rm|mv|cp|tee|touch|mkdir|rmdir|ln|chmod|truncate|dd|install|rsync)[[:space:]]' \
@@ -35,7 +45,10 @@ guard_bash() {
     target="${rest#"${rest%%[![:space:]>&|\"\']*}"}"
     target="${target%%[[:space:];&|]*}"
     case "$target" in
+      /dev/*) ;;
       *"$clones"* | *".claude/team-memory"*) deny "$bash_write_refused" ;;
+      /*) ;;
+      ?*) $inside && deny "$bash_write_refused" ;;
     esac
   done
 }
@@ -101,10 +114,17 @@ pre_tool_use() {
     read -r file
   } < <(jq -r '.tool_name // "", .tool_input.file_path // ""' <<<"$input")
   if [ "$tool" = "Bash" ]; then
-    guard_bash "$(jq -r '.tool_input.command // ""' <<<"$input")"
+    guard_bash "$(jq -r '.tool_input.command // ""' <<<"$input")" "$(jq -r '.cwd // ""' <<<"$input")"
     return 0
   fi
-  parts=$(tm_memory_path "$file") || return 0
+  if ! parts=$(tm_memory_path "$file"); then
+    local copy_root copy_team
+    if copy_root=$(tm_git_root "$file") && copy_team=$(tm_memory_repo_team "$settings" "$copy_root"); then
+      tm_register_copy "$copy_root" "$copy_team"
+      deny "$copy_root is a copy of the $copy_team team memory repo, where changes skip the team memory checks. Edit team memory in $(tm_clones_dir)/$copy_team instead, where every save is checked and pushed."
+    fi
+    return 0
+  fi
   team="${parts%% *}"
   rel="${parts#* }"
   clone="$(tm_clones_dir)/$team"

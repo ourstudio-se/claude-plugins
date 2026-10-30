@@ -45,3 +45,42 @@ tm_workspace_teams() {
     | select(all($owners[]; . as $owner | $team.value.scope | index($owner)))
     | .key' <<<"$settings"
 }
+
+# Copies of a team's memory repo outside the plugin's clone, e.g. cloned by habit into a projects folder.
+# Edits there would skip every check, so the hooks block them; known copies are listed in this file.
+tm_copies_file() {
+  echo "$(tm_state_dir)/memory-copies"
+}
+
+# tm_memory_repo_team <settings json> <git root>: the team whose memory repo this checkout is a copy of.
+tm_memory_repo_team() {
+  local settings="$1" root="$2" key url="" team repo repo_key
+  case "$root" in
+    "$(tm_clones_dir)" | "$(tm_clones_dir)"/*) return 1 ;;
+  esac
+  key=$(tm_cached_repo_key "$root") || key=""
+  while IFS=$'\t' read -r team repo; do
+    if repo_key=$(tm_repo_url_key "$repo" 2>/dev/null); then
+      [ "$repo_key" = "$key" ] || continue
+    else
+      # A team repo given as a local path has no key; compare the origin as written.
+      [ -n "${url:-}" ] || url=$(git -C "$root" remote get-url origin 2>/dev/null) || continue
+      [ "$repo" = "$url" ] || continue
+    fi
+    echo "$team"
+    return 0
+  done < <(jq -r '.teams | to_entries[] | [.key, .value.repo] | @tsv' <<<"$settings")
+  return 1
+}
+
+tm_register_copy() {
+  local line="$1"$'\t'"$2"
+  grep -qxF -- "$line" "$(tm_copies_file)" 2>/dev/null && return 0
+  mkdir -p "$(tm_state_dir)"
+  echo "$line" >>"$(tm_copies_file)"
+}
+
+# tm_copy_roots: the roots of known copies, one per line.
+tm_copy_roots() {
+  cut -f 1 "$(tm_copies_file)" 2>/dev/null
+}

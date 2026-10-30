@@ -371,7 +371,10 @@ post_tool_use() {
       done
       ;;
     *)
-      if key=$(tm_cached_repo_key "$signal"); then
+      if team=$(tm_memory_repo_team "$settings" "$signal"); then
+        # A copy of a team's memory repo is not work in a team repo.
+        tm_register_copy "$signal" "$team"
+      elif key=$(tm_cached_repo_key "$signal"); then
         session_set --arg k "$key" '.touched = ((.touched // []) + [$k] | unique)'
         for team in $(tm_teams_for_repo "$settings" "$key"); do
           activate "$team" "repo $key" "$key"
@@ -414,11 +417,19 @@ if [ "$event" = "PostToolUse" ]; then
     grep -qxF "$signal" "$(seen_file)" 2>/dev/null && exit 0
   fi
 elif [ "$event" = "PreToolUse" ]; then
-  # Runs before every edit and Bash command: anything that does not mention a team clone is allowed at once.
+  # Runs before every edit and Bash command: anything that does not mention a team clone or a known copy of a
+  # memory repo is allowed at once. A Write may create a file in a copy not seen yet, so it is always checked.
+  relevant=false
   case "$input" in
-    *"$(tm_clones_dir)"* | *".claude/team-memory"*) ;;
-    *) exit 0 ;;
+    *"$(tm_clones_dir)"* | *".claude/team-memory"*) relevant=true ;;
   esac
+  if ! $relevant; then
+    while IFS= read -r copy; do
+      [ -n "$copy" ] && [[ "$input" == *"$copy"* ]] && relevant=true && break
+    done < <(tm_copy_roots)
+  fi
+  [[ "$input" =~ \"tool_name\"[[:space:]]*:[[:space:]]*\"Write\" ]] && relevant=true
+  $relevant || exit 0
   session=$(jq -r '.session_id // ""' <<<"$input" 2>/dev/null)
   tm_valid_session_id "$session" || exit 0
 else
