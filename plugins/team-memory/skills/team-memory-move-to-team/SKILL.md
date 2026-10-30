@@ -1,6 +1,6 @@
 ---
 name: team-memory-move-to-team
-description: Move the user's existing personal Claude memories, and team facts written as rules in CLAUDE.md files, into team memory in one reviewed batch. The personal copy is removed after a backup, so team-memory restore-personal can put it back. Use when the user asks to move, share, promote or import their memories to the team, or to move one specific memory.
+description: Move the user's existing personal Claude memories about the team's repos, and team facts written as rules in their personal CLAUDE.md files, into team memory in one reviewed batch. The personal copy is removed after a backup, so team-memory restore-personal can put it back. Use when the user asks to move, share, promote or import their memories to the team, or to move one specific memory.
 ---
 
 # Move personal memories to team memory
@@ -11,10 +11,22 @@ Direction: personal → team. The personal copy is removed only after the team m
 
 Start with `team-memory status`. Team memory must be active in this session for the team you move into, and memories under `repos/<owner>/<repo>/` can only go to repos this session has worked in. If a repo you need is not touched yet, read a file in it first.
 
-## 1. Scan
+## 1. Scan, only within the team's scope
 
-- Every personal memory folder: `~/.claude/projects/*/memory/*.md` (skip `MEMORY.md`).
-- The user's CLAUDE.md files: `~/.claude/CLAUDE.md` and those in the project folders. Only rules that are really team facts are candidates; instructions about how the user wants Claude to work stay.
+Only memories from the team's own work are candidates. Personal projects, other clients and anything else outside the team's scope are never read, let alone moved.
+
+```
+team-memory personal-folders <team>
+```
+
+It lists every personal memory folder with the folder its sessions started in, marked `in` (a repo of the team's scope, or a workspace folder of them), `out` or `unknown`.
+
+- **`in` folders:** read their memories (`*.md`, skip `MEMORY.md`). Even here a memory can be about other work, from a session that touched several repos: it is a candidate only when it is about the team's repos or platform.
+- **`out` folders:** never open them.
+- **`unknown` folders:** do not open them; list them in the report so the user can say if one belongs to the team.
+- **`~/.claude/CLAUDE.md`,** the user's own instructions for all projects: only rules that are verified facts about the team's repos or platform are candidates. Instructions about how the user wants Claude to work, and anything about other work, stay.
+- **`CLAUDE.local.md`** (the user's uncommitted, personal file) in the team's repos: the same.
+- **Never a `CLAUDE.md` committed in a repo:** it is already shared with everyone in that repo, and removing a rule from it would change the repo for everyone. When one holds a team fact, you may mention it in the report, but leave it.
 - The existing team index, to find duplicates.
 
 For a single memory ("move the ES error field memory to the team"), skip the scan and the table, and run steps 2 to 6 for that one.
@@ -52,10 +64,10 @@ It checks that the team memory has reached the remote, backs up the personal fil
 
 - **Team:** delete the personal file and remove its line from that folder's `MEMORY.md`.
 - **Mixed:** shrink the personal file to the personal part plus a link to the team memory, and update its `MEMORY.md` line.
-- **CLAUDE.md rule:** remove the rule from the CLAUDE.md file, telling the user which line went.
+- **Rule from `~/.claude/CLAUDE.md` or a `CLAUDE.local.md`:** remove the rule from that file, telling the user which line went.
 
 If it says the memory is not pushed yet, wait a few seconds and run it again; never delete a personal file before it succeeds.
 
 ## 7. Report
 
-One short summary: how many moved, merged, stayed personal or were dropped as stale, and that `team-memory restore-personal` puts the originals back if the user ever leaves team memory.
+One short summary: how many moved, merged, stayed personal or were dropped as stale, which folders were skipped as `unknown`, and that `team-memory restore-personal` puts the originals back if the user ever leaves team memory.

@@ -7,6 +7,14 @@ setup_session() {
   CLONE="$TEAM_MEMORY_HOME/acme"
   PERSONAL="$HOME/.claude/projects/-home-test-projects/memory"
   mkdir -p "$PERSONAL"
+  # Sessions of this personal memory folder started in acme/api.
+  echo "{\"cwd\":\"$BATS_TEST_TMPDIR/projects/api\"}" >"$(dirname "$PERSONAL")/session.jsonl"
+}
+
+# personal_folder <name> <start folder or "">: a personal memory folder whose sessions started there.
+personal_folder() {
+  mkdir -p "$HOME/.claude/projects/$1/memory"
+  [ -z "$2" ] || echo "{\"cwd\":\"$2\"}" >"$HOME/.claude/projects/$1/session.jsonl"
 }
 
 # save <relative path> <description>: a memory saved through the hooks in session s1.
@@ -188,4 +196,57 @@ moved() {
   run tm restore-personal
   [ "$status" -eq 0 ]
   [[ "$output" == *"Nothing to restore"* ]]
+}
+
+@test "personal-folders marks folders in and out of the team's scope" {
+  setup_session
+  repo_at hobby git@github.com:someone/hobby.git
+  repo_at ws/web git@github.com:acme/web.git
+  personal_folder hobby "$BATS_TEST_TMPDIR/hobby"
+  personal_folder ws "$BATS_TEST_TMPDIR/ws"
+  personal_folder gone "/no/such/folder"
+  run tm personal-folders acme --json
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.[] | select(.memory | contains("-home-test-projects")) | .scope' <<<"$output")" = "in" ]
+  [ "$(jq -r '.[] | select(.memory | contains("/hobby/")) | .scope' <<<"$output")" = "out" ]
+  [ "$(jq -r '.[] | select(.memory | contains("/ws/")) | .scope' <<<"$output")" = "in" ]
+  [ "$(jq -r '.[] | select(.memory | contains("/gone/")) | .scope' <<<"$output")" = "unknown" ]
+}
+
+@test "a folder without transcripts is found from its name" {
+  setup_session
+  mkdir -p "$BATS_TEST_TMPDIR/projects/my-app.web"
+  git init -q "$BATS_TEST_TMPDIR/projects/my-app.web"
+  git -C "$BATS_TEST_TMPDIR/projects/my-app.web" remote add origin git@github.com:acme/my-app.web.git
+  name=$(echo "$BATS_TEST_TMPDIR/projects/my-app.web" | tr '/.' '--')
+  personal_folder "$name" ""
+  run tm personal-folders acme
+  [[ "$output" == *"in	$HOME/.claude/projects/$name/memory	$BATS_TEST_TMPDIR/projects/my-app.web"* ]]
+}
+
+@test "moved-to-team refuses a memory from outside the team's scope" {
+  setup_session
+  session_start s1 "$BATS_TEST_TMPDIR/projects/api" >/dev/null
+  repo_at hobby git@github.com:someone/hobby.git
+  personal_folder hobby "$BATS_TEST_TMPDIR/hobby"
+  echo "hobby fact" >"$HOME/.claude/projects/hobby/memory/fact.md"
+  save general/kafka-retries.md "Kafka consumers retry three times"
+  wait_until remote_has "memory: add general/kafka-retries.md"
+  run tm moved-to-team "$HOME/.claude/projects/hobby/memory/fact.md" "$CLONE/general/kafka-retries.md"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"outside team acme's scope"* ]]
+  [ -f "$HOME/.claude/projects/hobby/memory/fact.md" ]
+}
+
+@test "moved-to-team refuses a CLAUDE.md committed in a repo" {
+  setup_session
+  session_start s1 "$BATS_TEST_TMPDIR/projects/api" >/dev/null
+  echo "rule" >"$BATS_TEST_TMPDIR/projects/api/CLAUDE.md"
+  git -C "$BATS_TEST_TMPDIR/projects/api" add CLAUDE.md
+  git -C "$BATS_TEST_TMPDIR/projects/api" commit -qm claude
+  save general/kafka-retries.md "Kafka consumers retry three times"
+  wait_until remote_has "memory: add general/kafka-retries.md"
+  run tm moved-to-team "$BATS_TEST_TMPDIR/projects/api/CLAUDE.md" "$CLONE/general/kafka-retries.md"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"committed in a repo"* ]]
 }
