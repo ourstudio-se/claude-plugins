@@ -212,8 +212,8 @@ activate() {
   if $was_active; then
     [ -n "$lines" ] || return 0
     say "Team memory ($team) for $(tm_repo_folder "$key")/:"
-    say "$lines"
-    printf '%s\n' "$lines" >>"$(snapshot_file "$team")"
+    say "$(printf '%s\n' "$lines" | sed 's/^#more /- /')"
+    printf '%s\n' "$lines" | grep -v '^#more ' >>"$(snapshot_file "$team")"
   else
     show_index "$team" "$lines"
   fi

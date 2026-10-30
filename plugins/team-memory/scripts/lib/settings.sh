@@ -1,7 +1,7 @@
 # Settings, state and clone locations, sourced by bin/team-memory and scripts/hook.sh.
 # Bash 3.2 compatible; JSON is handled with jq.
 
-TM_DEFAULTS='{"pull_interval_minutes":5,"stale_after_months":6,"max_general_index_lines":300,"private_owners":[],"teams":{}}'
+TM_DEFAULTS='{"pull_interval_minutes":5,"stale_after_months":6,"max_general_index_lines":900,"max_repo_index_lines":600,"private_owners":[],"teams":{}}'
 
 # TEAM_MEMORY_SETTINGS, TEAM_MEMORY_STATE and TEAM_MEMORY_HOME override the locations (used by tests).
 tm_settings_path() {

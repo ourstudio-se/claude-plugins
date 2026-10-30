@@ -44,20 +44,24 @@ tm_stale_cutoff() {
   tm_months_ago "$(jq -r .stale_after_months <<<"$1")"
 }
 
-# tm_general_index <settings json> <team>: index lines for general/, at most max_general_index_lines.
+# tm_capped_index <settings json> <team> <folder> <max>: index lines for a folder, newest first, at most max.
 # When there are more, a last line starting with "#more " says so.
-tm_general_index() {
-  local clone max entries total
+tm_capped_index() {
+  local clone entries total
   clone="$(tm_clones_dir)/$2"
-  max=$(jq -r .max_general_index_lines <<<"$1")
-  entries=$(tm_folder_entries "$clone" general)
+  entries=$(tm_folder_entries "$clone" "$3")
   [ -n "$entries" ] || return 0
-  head -n "$max" <<<"$entries" | tm_format_entries "$(tm_stale_cutoff "$1")"
+  head -n "$4" <<<"$entries" | tm_format_entries "$(tm_stale_cutoff "$1")"
   total=$(wc -l <<<"$entries" | tr -d ' ')
-  [ "$total" -le "$max" ] || echo "#more $((total - max)) older memories in general/ are not listed; search $clone/general when needed."
+  [ "$total" -le "$4" ] || echo "#more $((total - $4)) older memories in $3/ are not listed; search $clone/$3 when needed."
 }
 
-# tm_repo_index <settings json> <team> <repo key>: index lines for the repo's folder.
+# tm_general_index <settings json> <team>: index lines for general/, at most max_general_index_lines.
+tm_general_index() {
+  tm_capped_index "$1" "$2" general "$(jq -r .max_general_index_lines <<<"$1")"
+}
+
+# tm_repo_index <settings json> <team> <repo key>: index lines for the repo's folder, at most max_repo_index_lines.
 tm_repo_index() {
-  tm_folder_entries "$(tm_clones_dir)/$2" "$(tm_repo_folder "$3")" | tm_format_entries "$(tm_stale_cutoff "$1")"
+  tm_capped_index "$1" "$2" "$(tm_repo_folder "$3")" "$(jq -r .max_repo_index_lines <<<"$1")"
 }

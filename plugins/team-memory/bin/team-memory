@@ -22,7 +22,7 @@ Usage: team-memory <command>
   scope add <team> <entry>...         Add scope entries: <git host>/<owner> or mcp:<server>
   scope remove <team> <entry>...      Remove scope entries
   set <key> <value>                   pull_interval_minutes, stale_after_months,
-                                      max_general_index_lines, <team>.enabled,
+                                      max_general_index_lines, max_repo_index_lines, <team>.enabled,
                                       <team>.workspace_detection, <team>.repo
   private add|remove <host>/<owner>   Owners whose repo names must never appear in team memory,
                                       e.g. other clients (your own GitHub account always counts)
@@ -46,7 +46,7 @@ status() {
   local settings teams team clone last pending
   settings=$(tm_settings_read) || exit 1
   echo "Settings: $(tm_settings_path)"
-  jq -r '"  pull_interval_minutes: \(.pull_interval_minutes)\n  stale_after_months: \(.stale_after_months)\n  max_general_index_lines: \(.max_general_index_lines)\n  private_owners: \(if (.private_owners | length) > 0 then (.private_owners | join(", ")) else "none (your own GitHub account always counts)" end)"' <<<"$settings"
+  jq -r '"  pull_interval_minutes: \(.pull_interval_minutes)\n  stale_after_months: \(.stale_after_months)\n  max_general_index_lines: \(.max_general_index_lines)\n  max_repo_index_lines: \(.max_repo_index_lines)\n  private_owners: \(if (.private_owners | length) > 0 then (.private_owners | join(", ")) else "none (your own GitHub account always counts)" end)"' <<<"$settings"
   teams=$(jq -r '.teams | keys[]' <<<"$settings")
   if [ -z "$teams" ]; then
     echo
@@ -147,7 +147,7 @@ set_value() {
   [ $# -eq 2 ] || tm_die "usage: team-memory set <key> <value>"
   local key="$1" value="$2" team field
   case "$key" in
-    pull_interval_minutes | stale_after_months | max_general_index_lines)
+    pull_interval_minutes | stale_after_months | max_general_index_lines | max_repo_index_lines)
       [[ "$value" =~ ^[1-9][0-9]*$ ]] || tm_die "$key must be a positive whole number"
       tm_settings_update --arg k "$key" --argjson v "$value" '.[$k] = $v'
       ;;

@@ -4,7 +4,7 @@ load helpers
   run tm status
   [ "$status" -eq 0 ]
   [[ "$output" == *"pull_interval_minutes: 5"* ]]
-  [[ "$output" == *"max_general_index_lines: 300"* ]]
+  [[ "$output" == *"max_general_index_lines: 900"* ]]
   [[ "$output" == *"No teams yet"* ]]
 }
 

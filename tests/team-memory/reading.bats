@@ -163,3 +163,24 @@ load helpers
   run session_start s1 "$WORK"
   [ -z "$output" ]
 }
+
+@test "a repo folder is capped at max_repo_index_lines, newest first" {
+  make_remote
+  add_memory repos/acme/api/a.md 2026-01-01 "oldest"
+  add_memory repos/acme/api/b.md 2026-02-01 "middle"
+  add_memory repos/acme/api/c.md 2026-03-01 "newest"
+  add_team
+  tm set max_repo_index_lines 2
+  make_work_repo git@github.com:acme/api.git
+  run session_start s1 "$WORK"
+  [[ "$output" == *"newest"* ]]
+  [[ "$output" == *"middle"* ]]
+  [[ "$output" != *"oldest"* ]]
+  [[ "$output" == *"1 older memories in repos/acme/api/ are not listed; search $TEAM_MEMORY_HOME/acme/repos/acme/api when needed."* ]]
+}
+
+@test "the default limits are 900 for general/ and 600 per repo" {
+  run tm status
+  [[ "$output" == *"max_general_index_lines: 900"* ]]
+  [[ "$output" == *"max_repo_index_lines: 600"* ]]
+}
