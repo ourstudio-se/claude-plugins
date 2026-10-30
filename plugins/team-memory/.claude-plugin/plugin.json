@@ -1,0 +1,18 @@
+{
+  "name": "team-memory",
+  "version": "0.1.0",
+  "description": "Shared Claude Code memory for a team, stored in a git repo",
+  "author": {
+    "name": "The claude-plugins contributors"
+  },
+  "repository": "https://github.com/ourstudio-se/claude-plugins",
+  "license": "MIT",
+  "userConfig": {
+    "settings_path": {
+      "type": "string",
+      "title": "Settings file",
+      "description": "Path to the team-memory settings file",
+      "default": "~/.config/claude-team-memory/teams.json"
+    }
+  }
+}

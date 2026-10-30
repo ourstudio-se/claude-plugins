@@ -1,0 +1,13 @@
+{
+  "name": "ourstudio",
+  "owner": {
+    "name": "ourstudio"
+  },
+  "plugins": [
+    {
+      "name": "team-memory",
+      "source": "./plugins/team-memory",
+      "description": "Shared Claude Code memory for a team, stored in a git repo"
+    }
+  ]
+}

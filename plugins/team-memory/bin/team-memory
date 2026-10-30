@@ -1,0 +1,292 @@
+#!/usr/bin/env bash
+# Shows and changes team-memory settings. Used by /team-memory and by setup tools that configure a team.
+set -u
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=../scripts/lib/settings.sh
+. "$root/scripts/lib/settings.sh"
+# shellcheck source=../scripts/lib/memory.sh
+. "$root/scripts/lib/memory.sh"
+# shellcheck source=../scripts/lib/index.sh
+. "$root/scripts/lib/index.sh"
+
+command -v jq >/dev/null 2>&1 || tm_die "jq is required"
+
+usage() {
+  cat <<'EOF'
+Usage: team-memory <command>
+
+  status                              Show settings, teams and clones (default)
+  teams add <name> <repo>             Add a team, or change its repo
+  teams remove <name> [--purge]       Remove a team; --purge also deletes its clone
+  scope add <team> <entry>...         Add scope entries: <git host>/<owner> or mcp:<server>
+  scope remove <team> <entry>...      Remove scope entries
+  set <key> <value>                   pull_interval_minutes, stale_after_months,
+                                      max_general_index_lines, <team>.enabled,
+                                      <team>.workspace_detection, <team>.repo
+  private add|remove <host>/<owner>   Owners whose repo names must never appear in team memory,
+                                      e.g. other clients (your own GitHub account always counts)
+  pause | resume                      Turn team memory off or on for the current session
+  undo                                Revert the last team memory save or delete of the current session
+  delete <memory file>                Delete a team memory (in the current session, with undo)
+  imported <personal file> <team memory file>
+                                      After an import: check the team memory is pushed, back up the
+                                      personal file and record the move (used by team-memory-import)
+  mine [--json]                       Team memories you created, with where imported ones came from
+                                      (used by team-memory-export)
+EOF
+}
+
+require_team() {
+  tm_valid_team_name "$1" || tm_die "invalid team name '$1' (use a-z, 0-9 and -)"
+  [ "$(tm_settings_read | jq --arg t "$1" '.teams | has($t)')" = "true" ] || tm_die "no team named '$1'"
+}
+
+status() {
+  local settings teams team clone last pending
+  settings=$(tm_settings_read) || exit 1
+  echo "Settings: $(tm_settings_path)"
+  jq -r '"  pull_interval_minutes: \(.pull_interval_minutes)\n  stale_after_months: \(.stale_after_months)\n  max_general_index_lines: \(.max_general_index_lines)\n  private_owners: \(if (.private_owners | length) > 0 then (.private_owners | join(", ")) else "none (your own GitHub account always counts)" end)"' <<<"$settings"
+  teams=$(jq -r '.teams | keys[]' <<<"$settings")
+  if [ -z "$teams" ]; then
+    echo
+    echo "No teams yet. Add one with: team-memory teams add <name> <repo>"
+    return
+  fi
+  for team in $teams; do
+    echo
+    jq -r --arg t "$team" '.teams[$t] |
+      "Team \($t) (\(if .enabled then "enabled" else "disabled" end))\n" +
+      "  repo:  \(.repo)\n" +
+      "  scope: \(if (.scope | length) > 0 then (.scope | join(", ")) else "none" end)\n" +
+      "  workspace detection: \(if .workspace_detection then "on" else "off" end)"' <<<"$settings"
+    clone="$(tm_clones_dir)/$team"
+    if [ ! -d "$clone/.git" ]; then
+      echo "  clone: $clone (not cloned yet)"
+      continue
+    fi
+    last="never"
+    if [ -f "$(tm_state_dir)/teams/$team/last_pull" ]; then
+      last="$(( ($(date +%s) - $(cat "$(tm_state_dir)/teams/$team/last_pull")) / 60 )) min ago"
+    fi
+    pending=$(git -C "$clone" rev-list --count '@{u}..HEAD' 2>/dev/null || echo "?")
+    echo "  clone: $clone (last pull $last, $pending pending pushes)"
+  done
+  recent_sessions
+}
+
+# The script cannot tell which session runs it, so it lists the most recently active ones.
+recent_sessions() {
+  local files f
+  files=$(ls -t "$(tm_state_dir)"/sessions/*.json 2>/dev/null | head -n 3)
+  [ -n "$files" ] || return 0
+  echo
+  echo "Recent sessions:"
+  for f in $files; do
+    jq -r --arg id "$(basename "$f" .json)" '
+      "  \($id[0:8]) in \(.cwd // "?")\(if .paused then " (paused)" else "" end)\n" +
+      (if (.teams // {}) == {} then "    no team active"
+       else ([.teams | to_entries[] | "    \(.key): active by \(.value.signal)\(if (.value.repos | length) > 0 then ", repos " + (.value.repos | join(", ")) else "" end)"] | join("\n")) end) +
+      "\n    touched \(.touched // [] | length) repos, \(.mcp // [] | length) MCP servers"' "$f"
+  done
+}
+
+teams_add() {
+  [ $# -eq 2 ] || tm_die "usage: team-memory teams add <name> <repo>"
+  tm_valid_team_name "$1" || tm_die "invalid team name '$1' (use a-z, 0-9 and -)"
+  tm_settings_update --arg t "$1" --arg r "$2" \
+    '.teams[$t] = ({scope: [], workspace_detection: true, enabled: true} + (.teams[$t] // {}) + {repo: $r})'
+  echo "Team $1 uses $2"
+}
+
+teams_remove() {
+  local purge=false yes=false arg created
+  [ $# -ge 1 ] || tm_die "usage: team-memory teams remove <name> [--purge [--yes]]"
+  for arg in "${@:2}"; do
+    case "$arg" in
+      --purge) purge=true ;;
+      --yes) yes=true ;;
+      *) tm_die "unknown option $arg" ;;
+    esac
+  done
+  require_team "$1"
+  created=$(mine_entries | jq -s --arg t "$1" 'map(select(.team == $t)) | length')
+  if [ "$created" != "0" ]; then
+    if $purge && ! $yes; then
+      tm_die "you created $created memories in team $1. Run /team-memory-export in Claude first to copy them to personal memory (it needs the clone), or add --yes to delete the clone anyway."
+    fi
+    $purge || echo "Note: you created $created memories in team $1; /team-memory-export copies them to personal memory while the clone exists."
+  fi
+  tm_settings_update --arg t "$1" 'del(.teams[$t])'
+  if $purge; then
+    rm -rf "$(tm_clones_dir)/$1" "$(tm_state_dir)/teams/$1"
+    echo "Removed team $1 and deleted its clone"
+  else
+    echo "Removed team $1; its clone stays in $(tm_clones_dir)/$1 (use --purge to delete it)"
+  fi
+}
+
+scope_change() {
+  local action="$1" team="$2" entry entries
+  shift 2
+  [ $# -ge 1 ] || tm_die "usage: team-memory scope $action <team> <entry>..."
+  require_team "$team"
+  for entry in "$@"; do
+    tm_valid_scope_entry "$entry" || tm_die "invalid scope entry '$entry' (use <git host>/<owner> or mcp:<server>)"
+  done
+  entries=$(printf '%s\n' "$@" | jq -R . | jq -s .)
+  if [ "$action" = "add" ]; then
+    tm_settings_update --arg t "$team" --argjson e "$entries" '.teams[$t].scope = (.teams[$t].scope + $e | unique)'
+  else
+    tm_settings_update --arg t "$team" --argjson e "$entries" '.teams[$t].scope -= $e'
+  fi
+  tm_settings_read | jq -r --arg t "$team" '"Scope of \($t): \(if (.teams[$t].scope | length) > 0 then (.teams[$t].scope | join(", ")) else "none" end)"'
+}
+
+set_value() {
+  [ $# -eq 2 ] || tm_die "usage: team-memory set <key> <value>"
+  local key="$1" value="$2" team field
+  case "$key" in
+    pull_interval_minutes | stale_after_months | max_general_index_lines)
+      [[ "$value" =~ ^[1-9][0-9]*$ ]] || tm_die "$key must be a positive whole number"
+      tm_settings_update --arg k "$key" --argjson v "$value" '.[$k] = $v'
+      ;;
+    *.enabled | *.workspace_detection | *.repo)
+      team="${key%.*}"
+      field="${key##*.}"
+      require_team "$team"
+      if [ "$field" = "repo" ]; then
+        tm_settings_update --arg t "$team" --arg v "$value" '.teams[$t].repo = $v'
+      else
+        [ "$value" = "true" ] || [ "$value" = "false" ] || tm_die "$key must be true or false"
+        tm_settings_update --arg t "$team" --arg f "$field" --argjson v "$value" '.teams[$t][$f] = $v'
+      fi
+      ;;
+    *) tm_die "unknown setting '$key'" ;;
+  esac
+  echo "$key = $value"
+}
+
+# One JSON object per team memory the user created (first commit authored with their git email).
+mine_entries() {
+  local email clones team clone manifest
+  email=$(git config user.email)
+  [ -n "$email" ] || return 0
+  clones=$(tm_clones_dir)
+  manifest="$(tm_backup_dir)/manifest.jsonl"
+  for team in $(tm_settings_read | jq -r '.teams | keys[]'); do
+    clone="$clones/$team"
+    [ -d "$clone/.git" ] || continue
+    git -C "$clone" log --reverse --diff-filter=A --name-only --format='@%ae' -- general repos 2>/dev/null |
+      awk -v e="$email" '/^@/ { a = substr($0, 2); next } NF && !seen[$0]++ && tolower(a) == tolower(e) { print }' |
+      while IFS= read -r rel; do
+        [ -f "$clone/$rel" ] || continue
+        jq -cn --arg t "$team" --arg r "$rel" --arg p "$clone/$rel" --arg d "$(tm_frontmatter "$clone/$rel" | cut -f 2-)" \
+          --slurpfile m <(cat "$manifest" 2>/dev/null) \
+          '($m | map(select(.team == $t and .rel == $r)) | last) as $from
+           | {team: $t, rel: $r, path: $p, description: $d,
+              personal: ($from.personal // null), backup: ($from.backup // null), index_line: ($from.index_line // null)}'
+      done
+  done
+}
+
+mine() {
+  local entries
+  entries=$(mine_entries)
+  if [ "${1:-}" = "--json" ]; then
+    printf '%s\n' "$entries" | jq -s .
+    return
+  fi
+  if [ -z "$entries" ]; then
+    echo "You have not created any team memories."
+    return
+  fi
+  printf '%s\n' "$entries" | jq -r '"\(.team)  \(.rel)  \(.description)" + (if .personal then "\n    imported from \(.personal)" + (if .backup then ", backup \(.backup)" else "" end) else "" end)'
+}
+
+# imported <personal file> <team memory file>: run by team-memory-import after a move. Checks the team memory
+# is pushed, backs up the personal file and records the move, so team-memory-export can restore it.
+imported() {
+  [ $# -eq 2 ] || tm_die "usage: team-memory imported <personal file> <team memory file>"
+  local personal="$1" parts team rel clone dest index_line
+  [ -f "$personal" ] || tm_die "no such file: $personal"
+  parts=$(tm_memory_path "$2") || tm_die "$2 is not in a team clone"
+  team="${parts%% *}"
+  rel="${parts#* }"
+  clone="$(tm_clones_dir)/$team"
+  git -C "$clone" cat-file -e "@{u}:$rel" 2>/dev/null && git -C "$clone" diff --quiet '@{u}' -- "$rel" ||
+    tm_die "$rel is not pushed yet; wait a moment and run this again. Keep $personal until then."
+  dest="$(tm_backup_dir)/$(date +%Y-%m-%d)/$(basename "$(dirname "$(dirname "$personal")")")/$(basename "$personal")"
+  mkdir -p "$(dirname "$dest")"
+  cp -p "$personal" "$dest"
+  index_line=$(grep -F "($(basename "$personal"))" "$(dirname "$personal")/MEMORY.md" 2>/dev/null | head -n 1)
+  jq -cn --arg p "$personal" --arg b "$dest" --arg t "$team" --arg r "$rel" --arg i "$index_line" --arg d "$(date +%Y-%m-%d)" \
+    '{date: $d, personal: $p, backup: $b, team: $t, rel: $r, index_line: $i}' >>"$(tm_backup_dir)/manifest.jsonl"
+  echo "Backed up to $dest. You can now remove $personal and its MEMORY.md line."
+}
+
+# The script cannot tell which session runs it: the next hook call with a session id (right after this
+# Bash call, or at the next prompt) applies the request to its session.
+request() {
+  local dir
+  dir=$(tm_state_dir)
+  mkdir -p "$dir"
+  echo "$1 $(date +%s) ${2:-}" >"$dir/request"
+  case "$1" in
+    undo) echo "Undoing the last team memory save of this session." ;;
+    delete) echo "Deleting $2 from team memory." ;;
+    *) echo "Team memory will be ${1}d for this session." ;;
+  esac
+}
+
+case "${1:-status}" in
+  status) status ;;
+  teams)
+    case "${2:-}" in
+      add) shift 2 && teams_add "$@" ;;
+      remove) shift 2 && teams_remove "$@" ;;
+      *) tm_die "usage: team-memory teams add|remove ..." ;;
+    esac
+    ;;
+  scope)
+    case "${2:-}" in
+      add | remove)
+        action="$2"
+        shift 2
+        [ $# -ge 1 ] || tm_die "usage: team-memory scope $action <team> <entry>..."
+        scope_change "$action" "$@"
+        ;;
+      *) tm_die "usage: team-memory scope add|remove <team> <entry>..." ;;
+    esac
+    ;;
+  set) shift && set_value "$@" ;;
+  private)
+    case "${2:-}" in
+      add | remove)
+        [ $# -eq 3 ] && [[ "$3" =~ ^[A-Za-z0-9.-]+\.[A-Za-z]+/[A-Za-z0-9_.-]+$ ]] ||
+          tm_die "usage: team-memory private add|remove <host>/<owner>, e.g. github.com/other-client"
+        if [ "$2" = "add" ]; then
+          tm_settings_update --arg o "$3" '.private_owners = (.private_owners + [$o] | unique)'
+        else
+          tm_settings_update --arg o "$3" '.private_owners -= [$o]'
+        fi
+        tm_settings_read | jq -r '"Private owners: \(if (.private_owners | length) > 0 then (.private_owners | join(", ")) else "none" end)"'
+        ;;
+      *) tm_die "usage: team-memory private add|remove <host>/<owner>" ;;
+    esac
+    ;;
+  pause | resume | undo) request "$1" ;;
+  delete)
+    [ $# -eq 2 ] || tm_die "usage: team-memory delete <memory file>"
+    case "$2" in
+      /*) file="$2" ;;
+      *) file="$PWD/$2" ;;
+    esac
+    [ -f "$file" ] || tm_die "no such file: $file"
+    request delete "$file"
+    ;;
+  imported) shift && imported "$@" ;;
+  mine) shift && mine "$@" ;;
+  help | -h | --help) usage ;;
+  *) usage >&2 && exit 1 ;;
+esac
