@@ -250,3 +250,23 @@ moved() {
   [ "$status" -eq 1 ]
   [[ "$output" == *"committed in a repo"* ]]
 }
+
+@test "a file moved twice the same day keeps both backups and restores the original" {
+  setup_session
+  session_start s1 "$BATS_TEST_TMPDIR/projects/api" >/dev/null
+  echo "original" >"$PERSONAL/project_mixed.md"
+  save general/first-part.md "first part"
+  wait_until remote_has "memory: add general/first-part.md"
+  tm moved-to-team "$PERSONAL/project_mixed.md" "$CLONE/general/first-part.md" >/dev/null
+  echo "shortened" >"$PERSONAL/project_mixed.md"
+  save general/second-part.md "second part"
+  wait_until remote_has "memory: add general/second-part.md"
+  tm moved-to-team "$PERSONAL/project_mixed.md" "$CLONE/general/second-part.md" >/dev/null
+  [ "$(jq -sr 'map(.backup) | unique | length' "$TEAM_MEMORY_BACKUP/manifest.jsonl")" = "2" ]
+  [ "$(cat "$(jq -sr '.[0].backup' "$TEAM_MEMORY_BACKUP/manifest.jsonl")")" = "original" ]
+  [ "$(cat "$(jq -sr '.[1].backup' "$TEAM_MEMORY_BACKUP/manifest.jsonl")")" = "shortened" ]
+  rm "$PERSONAL/project_mixed.md"
+  tm set acme.enabled false
+  tm restore-personal >/dev/null
+  [ "$(cat "$PERSONAL/project_mixed.md")" = "original" ]
+}

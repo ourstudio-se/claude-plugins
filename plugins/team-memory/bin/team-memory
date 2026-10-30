@@ -307,6 +307,12 @@ moved_to_team() {
   git -C "$clone" cat-file -e "@{u}:$rel" 2>/dev/null && git -C "$clone" diff --quiet '@{u}' -- "$rel" ||
     tm_die "$rel is not pushed yet; wait a moment and run this again. Keep $personal until then."
   dest="$(tm_backup_dir)/$(date +%Y-%m-%d)/$(basename "$(dirname "$(dirname "$personal")")")/$(basename "$personal")"
+  # A file moved again the same day (a mixed memory moved in parts) must not overwrite its earlier backup.
+  local n=2 base="$dest"
+  while [ -e "$dest" ]; do
+    dest="${base%.*}-$n.${base##*.}"
+    n=$((n + 1))
+  done
   mkdir -p "$(dirname "$dest")"
   cp -p "$personal" "$dest"
   index_line=$(grep -F "($(basename "$personal"))" "$(dirname "$personal")/MEMORY.md" 2>/dev/null | head -n 1)
@@ -331,8 +337,8 @@ restore_personal() {
     echo "Nothing to restore: no personal memories were moved to team memory on this machine."
     return 0
   }
-  # The latest move of each personal file wins.
-  entries=$(jq -sc 'group_by(.personal) | map(last) | .[]' "$manifest")
+  # The first move of each personal file holds the original, before any part of it was moved.
+  entries=$(jq -sc 'group_by(.personal) | map(first) | .[]' "$manifest")
   on=$(tm_settings_read | jq -r --argjson e "$(jq -sc 'map(.team) | unique' "$manifest")" \
     '[.teams | to_entries[] | select(.value.enabled and (.key as $k | $e | index($k))) | .key] | join(", ")')
   if [ -n "$on" ] && ! $yes; then
