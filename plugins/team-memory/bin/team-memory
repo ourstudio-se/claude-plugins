@@ -29,11 +29,17 @@ Usage: team-memory <command>
   pause | resume                      Turn team memory off or on for the current session
   undo                                Revert the last team memory save or delete of the current session
   delete <memory file>                Delete a team memory (in the current session, with undo)
-  imported <personal file> <team memory file>
-                                      After an import: check the team memory is pushed, back up the
-                                      personal file and record the move (used by team-memory-import)
-  mine [--json]                       Team memories you created, with where imported ones came from
-                                      (used by team-memory-export)
+  moved-to-team <personal file> <team memory file>
+                                      After a move to the team: check the team memory is pushed, back
+                                      up the personal file and record the move (used by the
+                                      team-memory-move-to-team skill)
+  restore-personal [--force] [--yes]  Put back the personal memories that were moved to the team,
+                                      exactly as they were, from the backups. Existing personal files
+                                      are skipped unless --force. Meant for leaving team memory: while
+                                      a team is still on it asks for --yes, since the facts would
+                                      then exist twice
+  mine [--json]                       Team memories you created, with where moved ones came from
+                                      (used by the team-memory-copy-to-personal skill)
 EOF
 }
 
@@ -113,9 +119,9 @@ teams_remove() {
   created=$(mine_entries | jq -s --arg t "$1" 'map(select(.team == $t)) | length')
   if [ "$created" != "0" ]; then
     if $purge && ! $yes; then
-      tm_die "you created $created memories in team $1. Run /team-memory-export in Claude first to copy them to personal memory (it needs the clone), or add --yes to delete the clone anyway."
+      tm_die "you created $created memories in team $1. To keep them, first run team-memory restore-personal (the originals you moved) or /team-memory-copy-to-personal in Claude (it needs the clone), or add --yes to delete the clone anyway."
     fi
-    $purge || echo "Note: you created $created memories in team $1; /team-memory-export copies them to personal memory while the clone exists."
+    $purge || echo "Note: you created $created memories in team $1; /team-memory-copy-to-personal copies them to personal memory while the clone exists."
   fi
   tm_settings_update --arg t "$1" 'del(.teams[$t])'
   if $purge; then
@@ -201,13 +207,13 @@ mine() {
     echo "You have not created any team memories."
     return
   fi
-  printf '%s\n' "$entries" | jq -r '"\(.team)  \(.rel)  \(.description)" + (if .personal then "\n    imported from \(.personal)" + (if .backup then ", backup \(.backup)" else "" end) else "" end)'
+  printf '%s\n' "$entries" | jq -r '"\(.team)  \(.rel)  \(.description)" + (if .personal then "\n    moved from \(.personal)" + (if .backup then ", backup \(.backup)" else "" end) else "" end)'
 }
 
-# imported <personal file> <team memory file>: run by team-memory-import after a move. Checks the team memory
-# is pushed, backs up the personal file and records the move, so team-memory-export can restore it.
-imported() {
-  [ $# -eq 2 ] || tm_die "usage: team-memory imported <personal file> <team memory file>"
+# moved_to_team <personal file> <team memory file>: run by the move-to-team skill after a move. Checks the team
+# memory is pushed, backs up the personal file and records the move, so restore-personal can put it back.
+moved_to_team() {
+  [ $# -eq 2 ] || tm_die "usage: team-memory moved-to-team <personal file> <team memory file>"
   local personal="$1" parts team rel clone dest index_line
   [ -f "$personal" ] || tm_die "no such file: $personal"
   parts=$(tm_memory_path "$2") || tm_die "$2 is not in a team clone"
@@ -223,6 +229,55 @@ imported() {
   jq -cn --arg p "$personal" --arg b "$dest" --arg t "$team" --arg r "$rel" --arg i "$index_line" --arg d "$(date +%Y-%m-%d)" \
     '{date: $d, personal: $p, backup: $b, team: $t, rel: $r, index_line: $i}' >>"$(tm_backup_dir)/manifest.jsonl"
   echo "Backed up to $dest. You can now remove $personal and its MEMORY.md line."
+}
+
+# restore_personal [--force] [--yes]: copies each backed-up personal memory back to where it was moved from,
+# with its MEMORY.md line. Team memory is not touched.
+restore_personal() {
+  local force=false yes=false arg manifest entries on personal backup line folder restored=0 skipped=""
+  for arg in "$@"; do
+    case "$arg" in
+      --force) force=true ;;
+      --yes) yes=true ;;
+      *) tm_die "usage: team-memory restore-personal [--force] [--yes]" ;;
+    esac
+  done
+  manifest="$(tm_backup_dir)/manifest.jsonl"
+  [ -s "$manifest" ] || {
+    echo "Nothing to restore: no personal memories were moved to team memory on this machine."
+    return 0
+  }
+  # The latest move of each personal file wins.
+  entries=$(jq -sc 'group_by(.personal) | map(last) | .[]' "$manifest")
+  on=$(tm_settings_read | jq -r --argjson e "$(jq -sc 'map(.team) | unique' "$manifest")" \
+    '[.teams | to_entries[] | select(.value.enabled and (.key as $k | $e | index($k))) | .key] | join(", ")')
+  if [ -n "$on" ] && ! $yes; then
+    tm_die "team memory is still on for $on, so restored memories would exist twice: in your personal memory, where they win and stop getting colleagues' fixes, and in team memory. If you are leaving, turn it off first (team-memory set <team>.enabled false), or add --yes to restore anyway."
+  fi
+  while IFS= read -r line; do
+    personal=$(jq -r .personal <<<"$line")
+    backup=$(jq -r .backup <<<"$line")
+    if [ ! -f "$backup" ]; then
+      skipped="$skipped  $personal (backup missing: $backup)"$'\n'
+      continue
+    fi
+    if [ -e "$personal" ] && ! $force; then
+      skipped="$skipped  $personal (already exists; backup at $backup, --force replaces it)"$'\n'
+      continue
+    fi
+    mkdir -p "$(dirname "$personal")"
+    cp -p "$backup" "$personal"
+    restored=$((restored + 1))
+    folder=$(dirname "$personal")
+    [ "$(basename "$personal")" = "CLAUDE.md" ] && continue
+    if ! grep -qF "($(basename "$personal"))" "$folder/MEMORY.md" 2>/dev/null; then
+      index=$(jq -r '.index_line // ""' <<<"$line")
+      [ -n "$index" ] || index="- [$(basename "$personal" .md)]($(basename "$personal")) — $(tm_frontmatter "$personal" | cut -f 2-)"
+      echo "$index" >>"$folder/MEMORY.md"
+    fi
+  done <<<"$entries"
+  echo "Restored $restored personal memories from the backups. Team memory is unchanged."
+  [ -z "$skipped" ] || printf 'Skipped:\n%s' "$skipped"
 }
 
 # The script cannot tell which session runs it: the next hook call with a session id (right after this
@@ -285,7 +340,8 @@ case "${1:-status}" in
     [ -f "$file" ] || tm_die "no such file: $file"
     request delete "$file"
     ;;
-  imported) shift && imported "$@" ;;
+  moved-to-team) shift && moved_to_team "$@" ;;
+  restore-personal) shift && restore_personal "$@" ;;
   mine) shift && mine "$@" ;;
   help | -h | --help) usage ;;
   *) usage >&2 && exit 1 ;;

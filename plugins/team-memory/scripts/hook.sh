@@ -235,7 +235,7 @@ waiting_memories() {
   [ -n "$files" ] || return 0
   say "Personal memories waiting for $want to reach $default, which this session is on:"
   say "$(printf '%s\n' "$files" | sed 's/^/- /')"
-  say "Check each against the code here. Move the ones that are now true into team memory, without the marker line; after the save, run team-memory imported <personal file> <team memory file> and then remove the personal file and its MEMORY.md line. Leave the rest personal, and tell the user in one line what moved."
+  say "Check each against the code here. Move the ones that are now true into team memory, without the marker line; after the save, run team-memory moved-to-team <personal file> <team memory file> and then remove the personal file and its MEMORY.md line. Leave the rest personal, and tell the user in one line what moved."
 }
 
 session_start() {

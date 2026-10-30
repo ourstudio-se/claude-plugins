@@ -48,7 +48,7 @@ save() {
   [ -f "$CLONE/general/es-error.md" ]
 }
 
-@test "imported refuses until the memory is pushed, then backs up and records the move" {
+@test "moved-to-team refuses until the memory is pushed, then backs up and records the move" {
   setup_session
   session_start s1 "$BATS_TEST_TMPDIR/projects/api" >/dev/null
   echo "personal version" >"$PERSONAL/project_kafka.md"
@@ -56,11 +56,11 @@ save() {
   memory_text kafka-retries "Kafka consumers retry three times" >"$CLONE/general/kafka-retries.md"
   git -C "$CLONE" add general/kafka-retries.md
   git -C "$CLONE" commit -qm "memory: add general/kafka-retries.md"
-  run tm imported "$PERSONAL/project_kafka.md" "$CLONE/general/kafka-retries.md"
+  run tm moved-to-team "$PERSONAL/project_kafka.md" "$CLONE/general/kafka-retries.md"
   [ "$status" -eq 1 ]
   [[ "$output" == *"not pushed yet"* ]]
   git -C "$CLONE" push -q
-  run tm imported "$PERSONAL/project_kafka.md" "$CLONE/general/kafka-retries.md"
+  run tm moved-to-team "$PERSONAL/project_kafka.md" "$CLONE/general/kafka-retries.md"
   [ "$status" -eq 0 ]
   backup=$(jq -r .backup "$TEAM_MEMORY_BACKUP/manifest.jsonl")
   [ "$(cat "$backup")" = "personal version" ]
@@ -68,13 +68,13 @@ save() {
   [ "$(jq -r .rel "$TEAM_MEMORY_BACKUP/manifest.jsonl")" = "general/kafka-retries.md" ]
 }
 
-@test "mine lists the user's own memories with where imported ones came from" {
+@test "mine lists the user's own memories with where moved ones came from" {
   setup_session
   session_start s1 "$BATS_TEST_TMPDIR/projects/api" >/dev/null
   save general/kafka-retries.md "Kafka consumers retry three times"
   wait_until remote_has "memory: add general/kafka-retries.md"
   echo "personal version" >"$PERSONAL/project_kafka.md"
-  tm imported "$PERSONAL/project_kafka.md" "$CLONE/general/kafka-retries.md"
+  tm moved-to-team "$PERSONAL/project_kafka.md" "$CLONE/general/kafka-retries.md"
   git -C "$SEED" pull -q
   GIT_AUTHOR_EMAIL=colleague@example.com add_memory general/theirs.md "$(today)" "a colleague's memory"
   "$PLUGIN/scripts/sync.sh" acme "$REMOTE"
@@ -84,11 +84,11 @@ save() {
   [ "$(jq -r '.[] | select(.rel == "general/es-error.md") | .personal' <<<"$output")" = "null" ]
 }
 
-@test "teams remove --purge asks for an export first when the user created memories" {
+@test "teams remove --purge asks to keep the memories first when the user created memories" {
   setup_session
   run tm teams remove acme --purge
   [ "$status" -eq 1 ]
-  [[ "$output" == *"/team-memory-export"* ]]
+  [[ "$output" == *"restore-personal"* ]]
   [ -d "$CLONE" ]
   run tm teams remove acme --purge --yes
   [ "$status" -eq 0 ]
@@ -136,4 +136,56 @@ waiting() {
   git -C "$api" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/develop
   run session_start s1 "$api"
   [[ "$output" == *"waiting for acme/api to reach develop"* ]]
+}
+
+# moved <personal file name> <team rel> <description>: a personal memory moved to team memory through the hooks.
+moved() {
+  echo "original $1" >"$PERSONAL/$1"
+  echo "- [$1]($1) — $3" >>"$PERSONAL/MEMORY.md"
+  save "$2" "$3"
+  wait_until remote_has "memory: add $2"
+  tm moved-to-team "$PERSONAL/$1" "$CLONE/$2" >/dev/null
+  rm "$PERSONAL/$1"
+  grep -vF "($1)" "$PERSONAL/MEMORY.md" >"$PERSONAL/MEMORY.md.tmp" || true
+  mv "$PERSONAL/MEMORY.md.tmp" "$PERSONAL/MEMORY.md"
+}
+
+@test "restore-personal refuses while the team is on, unless --yes" {
+  setup_session
+  session_start s1 "$BATS_TEST_TMPDIR/projects/api" >/dev/null
+  moved project_kafka.md general/kafka-retries.md "Kafka consumers retry three times"
+  run tm restore-personal
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"still on for acme"* ]]
+  [ ! -f "$PERSONAL/project_kafka.md" ]
+  run tm restore-personal --yes
+  [ "$status" -eq 0 ]
+  [ "$(cat "$PERSONAL/project_kafka.md")" = "original project_kafka.md" ]
+}
+
+@test "restore-personal puts back the originals and their index lines, team memory untouched" {
+  setup_session
+  session_start s1 "$BATS_TEST_TMPDIR/projects/api" >/dev/null
+  moved project_kafka.md general/kafka-retries.md "Kafka consumers retry three times"
+  moved project_es.md general/es-mapping.md "ES mapping"
+  echo "kept" >"$PERSONAL/project_es.md"
+  tm set acme.enabled false
+  run tm restore-personal
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Restored 1 personal memories"* ]]
+  [[ "$output" == *"project_es.md (already exists"* ]]
+  [ "$(cat "$PERSONAL/project_kafka.md")" = "original project_kafka.md" ]
+  [ "$(cat "$PERSONAL/project_es.md")" = "kept" ]
+  [ "$(grep -c '(project_kafka.md)' "$PERSONAL/MEMORY.md")" = "1" ]
+  [ -f "$CLONE/general/kafka-retries.md" ]
+  run tm restore-personal --force
+  [ "$(cat "$PERSONAL/project_es.md")" = "original project_es.md" ]
+  [ "$(grep -c '(project_kafka.md)' "$PERSONAL/MEMORY.md")" = "1" ]
+}
+
+@test "restore-personal with nothing moved says so" {
+  setup_session
+  run tm restore-personal
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Nothing to restore"* ]]
 }

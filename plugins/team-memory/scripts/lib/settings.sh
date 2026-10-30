@@ -20,7 +20,7 @@ tm_clones_dir() {
   echo "${TEAM_MEMORY_HOME:-$HOME/.claude/team-memory}"
 }
 
-# Backups of imported personal memories and the manifest of what moved where, kept so they can be restored.
+# Backups of personal memories moved to team memory and the manifest of what moved where, kept so they can be restored.
 tm_backup_dir() {
   echo "${TEAM_MEMORY_BACKUP:-$HOME/.claude/team-memory-backup}"
 }

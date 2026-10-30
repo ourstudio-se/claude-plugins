@@ -1,13 +1,15 @@
 ---
-name: team-memory-import
-description: Move existing personal Claude memories, and team facts written as rules in CLAUDE.md files, into team memory in one reviewed batch, with a backup so they can be restored. Use when the user asks to import, share, move or promote their memories to the team, or to promote one specific memory.
+name: team-memory-move-to-team
+description: Move the user's existing personal Claude memories, and team facts written as rules in CLAUDE.md files, into team memory in one reviewed batch. The personal copy is removed after a backup, so team-memory restore-personal can put it back. Use when the user asks to move, share, promote or import their memories to the team, or to move one specific memory.
 ---
 
-# Import personal memories into team memory
+# Move personal memories to team memory
 
 Moves verified team facts out of the user's personal memory into team memory, so each fact lives in one place. This is the one place where you ask before saving: it touches many memories at once, and personal memories were written without the team in mind.
 
-Start with `team-memory status`. Team memory must be active in this session for the team you import into, and memories under `repos/<owner>/<repo>/` can only go to repos this session has worked in. If a repo you need is not touched yet, read a file in it first.
+Direction: personal → team. The personal copy is removed only after the team memory is pushed and the personal file is backed up. The way back is `team-memory restore-personal` (the exact originals) or the team-memory-copy-to-personal skill (the current team versions), both meant for leaving team memory.
+
+Start with `team-memory status`. Team memory must be active in this session for the team you move into, and memories under `repos/<owner>/<repo>/` can only go to repos this session has worked in. If a repo you need is not touched yet, read a file in it first.
 
 ## 1. Scan
 
@@ -15,7 +17,7 @@ Start with `team-memory status`. Team memory must be active in this session for 
 - The user's CLAUDE.md files: `~/.claude/CLAUDE.md` and those in the project folders. Only rules that are really team facts are candidates; instructions about how the user wants Claude to work stay.
 - The existing team index, to find duplicates.
 
-For a single memory ("promote the ES error field memory"), skip the scan and the table, and run steps 2 to 6 for that one.
+For a single memory ("move the ES error field memory to the team"), skip the scan and the table, and run steps 2 to 6 for that one.
 
 ## 2. Classify each item
 
@@ -43,10 +45,10 @@ Write each approved memory with Write. The hooks check the repo rule, the leak c
 For each saved memory, run:
 
 ```
-team-memory imported <personal file> <team memory file>
+team-memory moved-to-team <personal file or CLAUDE.md> <team memory file>
 ```
 
-It checks that the team memory has reached the remote, backs up the personal file to `~/.claude/team-memory-backup/` and records the move in a manifest, so `team-memory-export` can restore it. Only when it succeeds:
+It checks that the team memory has reached the remote, backs up the personal file to `~/.claude/team-memory-backup/` and records the move in a manifest, so `team-memory restore-personal` can put it back. Only when it succeeds:
 
 - **Team:** delete the personal file and remove its line from that folder's `MEMORY.md`.
 - **Mixed:** shrink the personal file to the personal part plus a link to the team memory, and update its `MEMORY.md` line.
@@ -56,4 +58,4 @@ If it says the memory is not pushed yet, wait a few seconds and run it again; ne
 
 ## 7. Report
 
-One short summary: how many moved, merged, stayed personal or were dropped as stale, and that `team-memory-export` brings them back if needed.
+One short summary: how many moved, merged, stayed personal or were dropped as stale, and that `team-memory restore-personal` puts the originals back if the user ever leaves team memory.
