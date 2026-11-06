@@ -309,6 +309,12 @@ session_start() {
 user_prompt_submit() {
   local team snapshot lines new
   paused && return
+  # A session that was running when the plugin was installed or reloaded (/reload-plugins) never had a
+  # SessionStart, so its first prompt does that work: register the session and show the whole index.
+  if [ "$(session_get 'has("cwd")')" != "true" ]; then
+    [ -n "$(missing_tools)" ] || session_start
+    return
+  fi
   for team in $(session_get '.teams // {} | keys[]'); do
     jq -e --arg t "$team" '.teams[$t].enabled' <<<"$settings" >/dev/null 2>&1 || continue
     show_notes "$team"

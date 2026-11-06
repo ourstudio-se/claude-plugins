@@ -184,3 +184,23 @@ load helpers
   [[ "$output" == *"max_general_index_lines: 900"* ]]
   [[ "$output" == *"max_repo_index_lines: 600"* ]]
 }
+
+@test "a session without SessionStart (plugin reloaded mid-session) gets the index at its first prompt, once" {
+  setup_team
+  repo_at ws/api git@github.com:acme/api.git
+  repo_at ws/web git@github.com:acme/web.git
+  run hook UserPromptSubmit "{\"session_id\":\"s1\",\"cwd\":\"$BATS_TEST_TMPDIR/ws\",\"prompt\":\"hi\"}"
+  [[ "$output" == *"# Team memory: acme"* ]]
+  [[ "$output" == *"- general/es-error.md: ES rejects string error fields"* ]]
+  [ "$(jq -r '.cwd' "$TEAM_MEMORY_STATE/sessions/s1.json")" = "$BATS_TEST_TMPDIR/ws" ]
+  run hook UserPromptSubmit "{\"session_id\":\"s1\",\"cwd\":\"$BATS_TEST_TMPDIR/ws\",\"prompt\":\"hi\"}"
+  [ -z "$output" ]
+}
+
+@test "a session without SessionStart outside the scope is registered and gets nothing" {
+  setup_team
+  make_work_repo git@github.com:someone/hobby.git
+  run hook UserPromptSubmit "{\"session_id\":\"s1\",\"cwd\":\"$WORK\",\"prompt\":\"hi\"}"
+  [ -z "$output" ]
+  [ -f "$TEAM_MEMORY_STATE/sessions/s1.json" ]
+}

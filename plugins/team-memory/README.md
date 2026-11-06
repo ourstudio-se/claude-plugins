@@ -12,7 +12,7 @@ team-memory scope add <team> github.com/<org> [mcp:<server>...]
 
 `team-memory` is on the PATH of Claude Code's Bash tool; outside Claude Code it is in the plugin's install folder under `bin/`. A team's own setup tool usually runs these steps.
 
-**Restart running sessions** after installing or updating: `/exit`, then `claude --continue` in the same folder. Team memory is loaded when a session starts; `/reload-plugins` loads the plugin but does not inject team memory.
+**Running sessions** pick up an install or update with `/reload-plugins`: team memory then arrives with the next prompt. Restarting (`/exit`, then `claude --continue` in the same folder) works too.
 
 To get new versions automatically, turn on auto-update for the marketplace (`/plugin` → Marketplaces → ourstudio → Enable auto-update); new versions then install when Claude Code starts.
 

@@ -16,7 +16,7 @@ load helpers
 
   run hook UserPromptSubmit '{"session_id":"s2"}'
   [ -z "$output" ]
-  [ ! -f "$TEAM_MEMORY_STATE/sessions/s2.json" ]
+  [ "$(jq -r '.paused // false' "$TEAM_MEMORY_STATE/sessions/s2.json")" = "false" ]
 }
 
 @test "resume clears the pause in UserPromptSubmit as plain text" {
@@ -33,7 +33,7 @@ load helpers
   echo "pause $(($(date +%s) - 600))" >"$TEAM_MEMORY_STATE/request"
   run hook UserPromptSubmit '{"session_id":"s1"}'
   [ -z "$output" ]
-  [ ! -f "$TEAM_MEMORY_STATE/sessions/s1.json" ]
+  [ "$(jq -r '.paused // false' "$TEAM_MEMORY_STATE/sessions/s1.json")" = "false" ]
 }
 
 @test "an unsafe session id is ignored" {
